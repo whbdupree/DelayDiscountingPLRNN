@@ -63,7 +63,7 @@ Figures 2 and 3 can be produced by running
 python performance.py
 ```
 
-To produce Figure 4, run the following scripts in order:
+To produce Figures 4 and S3, run the following scripts in order:
 
 ```
 python observation_model_analysis.py
@@ -71,7 +71,7 @@ python observation_model_stats.py
 python observation_model_exemplar.py
 ```
 
-The script `PCA.py` produces Figures 5, 8, 9, and S3:
+The script `PCA.py` produces Figures 5, 8, 9, and S5:
 
 ```
 python PCA.py
@@ -89,14 +89,19 @@ Figure 7 is produced with the following script:
 python exemplar_PCA.py
 ```
 
-Figure S1 is produced with the following command:
+Figure S2 is produced with the following command:
 ```
 python regselect_performance.py
 ```
 
-Figure S2 is produced with the following command:
+Figure S4 is produced with the following command:
 ```
 python linear_performance.py
 ```
 
-The main PLRNN figures can be found in `results/main/figures`. The linear RNN supplemental figures can be found in `results/linear/figures`. The regularization selection supplemental figures can be found in `results/regselect/figures`
+Figure S1 is produced with the following command:
+```
+python reward_boxplots.py
+```
+
+The main PLRNN figures can be found in `results/main/figures`. The linear RNN supplemental figures can be found in `results/linear/figures`. The regularization selection supplemental figures can be found in `results/regselect/figures`. Figure S1 can be found in `results/figures`.
