@@ -7,6 +7,7 @@ import pandas as pd
 from jax import tree,vmap
 from sklearn.metrics import r2_score
 from matplotlib import pyplot as plt
+from matplotlib import lines as mlines
 from matplotlib.backends.backend_pdf import PdfPages
 from utils import get_MAE
 
@@ -14,14 +15,24 @@ plt.rcParams.update({
     'font.family':'sans-serif',
 })
 
-def bootstrap(data1, data2, N=10000):
-    M = data1.size # 100 model instances
+def mk_line(n):
+    abc="abcdefghijklm"
+    s = f"{n}"
+    c = f"C{n}"
+    l = mlines.Line2D([], [], color=c, label=s)
+    return l
+
+
+                     
+def q1_q3_bootstrap(data1, data2, N=10000):
+    M1 = data1.size
+    M2 = data2.size     
     
-    bs_index1 = np.random.randint(M, size=(N, M))
+    bs_index1 = np.random.randint(M1, size=(N, M1))
     bs_data1 = data1[bs_index1]
     q1_data1 = np.quantile( bs_data1,0.25,axis=1)
     
-    bs_index2 = np.random.randint(M, size=(N, M))
+    bs_index2 = np.random.randint(M2, size=(N, M2))
     bs_data2 = data2[bs_index2]
     q3_data2 = np.quantile( bs_data2,0.75,axis=1)
     
@@ -30,6 +41,7 @@ def bootstrap(data1, data2, N=10000):
     p_value = counts / N
     
     return p_value
+
 
 def color_boxplots( boxplots, color ):
     for patch in boxplots['boxes']:
@@ -48,8 +60,9 @@ def color_boxplots( boxplots, color ):
     for patch in boxplots['fliers']:
         patch.set_markeredgecolor(color)
 
-get_item = lambda a:a.item()
-loader = lambda a: tree.map( get_item, dict(np.load(a,allow_pickle=True)) )
+def get_animals(tree):
+    animals = {key.split("_",1)[0] for key in tree}
+    return animals
 
 def process_metric_trees(mnpz, mpkl, model_instance, latent_size ):
     ## how is data organized on disk?
@@ -69,19 +82,28 @@ def process_metric_trees(mnpz, mpkl, model_instance, latent_size ):
     # shuffle5: r2s: recording: array
     # shufle15 ...
     
+    training_cc_tree = mnpz["training"][0]
+    testing_cc_tree = mnpz["testing"][0]    
+    training_animals = get_animals(training_cc_tree)
+    testing_animals = get_animals(testing_cc_tree)
+    unseen_animals = tuple(animal for animal in testing_animals if animal not in training_animals)
+    
     result = []
     for key in mnpz.files:
         for metric,metric_tree in zip( ('cc','r2'), mnpz[key] ):
             for rkey in metric_tree.keys():
                 data = metric_tree[rkey]
                 value = np.mean(data).item()
+                animal = rkey.split("_",1)[0]
                 result.append(
                     { 'group':key,
                       'metric':metric,
                       'model_instance':model_instance,
                       'latent_size':latent_size,
                       'recording':rkey,
-                      'value':value}
+                      'value':value,
+                      'unseen':animal in unseen_animals,
+                      'animal':animal}
                 )
     m_name_map={'ccs':'cc','r2s':'r2'}
     for key in mpkl.keys():
@@ -130,7 +152,7 @@ def run(epath,latent_sizes):
 
 def main_boxplots(df,axs,metric='cc'):
     ax1,ax2 = axs
-    df = df[df['metric']==metric]    
+    df = df.loc[df['metric']==metric]    
     data = df.groupby(['group','latent_size'])
     
     loc = np.array((-0.2,0,0.2,0.2))
@@ -138,9 +160,11 @@ def main_boxplots(df,axs,metric='cc'):
     latent_sizes = (3,5,10,20,50,100,200,500,1000)
     flierprops=dict(marker='x', markersize=3)    
     groups = ('training','testing')
+    testing_unseen_dict = {}
     for g,group in enumerate(groups):
         group_data = tuple( np.array(data.get_group((group,latent_size)).groupby('model_instance')['value'].mean())
                             for latent_size in latent_sizes )
+
         pos = loc[g]
         color=colors[g]
         l = len(group_data)
@@ -150,8 +174,29 @@ def main_boxplots(df,axs,metric='cc'):
                         showfliers=False,
                         widths = 0.15)
         color_boxplots(hh,color)
+        testing_unseen_dict[group]=group_data
+    testing = df.loc[df['group']=='testing']
+    unseen = testing.loc[testing["unseen"]==True]
+    grouped = unseen.groupby(['model_instance','latent_size'])
+    unseen_means = grouped['value'].mean()
+    unseen_data = tuple(unseen_means[:,latent_size].to_numpy() for latent_size in latent_sizes)
+    hh=ax1.boxplot( unseen_data,
+                    patch_artist = True,
+                    positions = np.arange(len(unseen_data))+loc[2],
+                    showfliers=False,
+                    widths = 0.15)
+    testing_unseen_dict["unseen"]=unseen_data
+    color_boxplots(hh,"grey")
     ax1.set_xticks( np.arange(len(latent_sizes)), latent_sizes )
     ax1.set_ylabel('Model Instance CC')
+    print('unseen:')
+    zip1 = zip( testing_unseen_dict['testing'],testing_unseen_dict['unseen'],latent_sizes )
+    pprint.pprint(
+        { z:q1_q3_bootstrap(x,y)
+          for x,y,z in zip1 }
+    )
+    
+    #
     groups = ('testing','scramble','shuffle5','shuffle15')
     group_dict = {}
     for g,group in enumerate(groups):
@@ -170,24 +215,26 @@ def main_boxplots(df,axs,metric='cc'):
     print('scramble:')
     zip1 = zip( group_dict['testing'],group_dict['scramble'],latent_sizes )
     pprint.pprint(
-        { z:bootstrap(x,y)
+        { z:q1_q3_bootstrap(x,y)
           for x,y,z in zip1 }
     )
     print('shuffle5:')
     zip2 = zip( group_dict['testing'],group_dict['shuffle5'],latent_sizes )
     pprint.pprint(
-        { z:bootstrap(x,y)
+        { z:q1_q3_bootstrap(x,y)
           for x,y,z in zip2 }
-    )
+   )
     print('shuffle15:')
     zip3 = zip( group_dict['testing'],group_dict['shuffle15'],latent_sizes )
     pprint.pprint(
-        { z:bootstrap(x,y)
+        { z:q1_q3_bootstrap(x,y)
           for x,y,z in zip3 }
     )
     ax2.set_xticks( np.arange(len(latent_sizes)), latent_sizes )
     ax2.set_ylabel('Model Instance CC')
     ax2.set_xlabel('No. Variables in Latent Model')
+    
+
 
 def model_selection_boxplots(df,ax, metric='cc'):
     df = df[df['metric']==metric]    
@@ -214,14 +261,15 @@ def model_selection_boxplots(df,ax, metric='cc'):
     ax.set_xlabel('No. Variables in Latent Model')
     
 if __name__ == '__main__':
-    compute_df = True
+    compute_df = False#True
     experiment_name = 'main'
     epath = os.path.join( 'results', experiment_name )
     fpath = os.path.join( epath, 'figures' )
     os.makedirs(fpath, exist_ok=True)
 
     ## main performance plots
-    latent_sizes = (3,5,10,20,30,40,50,100,200,500,1000)        
+    latent_sizes = (3,5,10,20,30,40,50,100,200,500,1000)
+    lls = len(latent_sizes)
     main_csv_path = os.path.join(epath,'metrics.csv')
     if compute_df:
         t0 = time.time()
@@ -239,12 +287,69 @@ if __name__ == '__main__':
         ax2 = plt.subplot(212)    
         main_boxplots( df, (ax1,ax2) )
         pdf.savefig(fig)
-
+        plt.close(fig)
+        
         ## plot model selection results with useful latent sizes
         fig = plt.figure()
         ax = plt.subplot(211)
         model_selection_boxplots(df,ax)
         pdf.savefig(fig)
+        plt.close(fig)
+        
+    ## histograms for the unseen animals
+    df = df.loc[df['metric'] == 'cc']
+    df = df.loc[df['group'] == 'testing']
+    df = df.loc[df['unseen'] == True]
+    unique_animals = df.groupby(['latent_size','model_instance'])['animal'].nunique()
+    out_path = os.path.join( fpath,'unseen_animal_counts.pdf')
+    bins = np.arange(8)
+    with PdfPages( out_path ) as pdf:
+        hists = np.zeros((bins.size,lls))
+        for i,(size, group) in enumerate(unique_animals.groupby('latent_size')):
+            data = group.to_numpy()
+            fig = plt.figure()
+            ax = plt.subplot(111)
+            bins_indicator = bins[:,None] == data
+            hist = np.sum( bins_indicator ,axis=1 )
+            hists[:,i]=hist
+            # how many model instances have three or more unseen animals?
+            three_or_more_unseen_animals = np.sum( hist[3:])
+            '''
+            ax.bar(bins,hist,width=1,facecolor="grey",edgecolor="grey")
+            ax.set_title(f"Three or more unseen animals in {three_or_more_unseen_animals} model instances.")
+            ax.set_xticks(np.arange(10))            
+            ax.set_xlabel("Unseen Animals by Model Instance")
+            ax.set_ylabel("Frequency")
+            fig.suptitle(f"Latent Size: {size}",fontsize=14)
+            pdf.savefig(fig)
+            plt.close(fig)
+            '''
+        # unseen animals won't show up in the "zero row" of this
+        # histogram array by definition. so we need to
+        # back-engineer model instances that have no unseen animals.
+        sh = np.sum(hists,axis=0)
+        hists[0] = 100-sh
+        # summary fig
+        fig = plt.figure()
+        ax = fig.add_axes((0.1,0.2,0.7,0.6))
+        last_row = np.zeros_like(hists[0])
+        for row in hists:
+            ax.bar(
+                tuple(str(x) for x in latent_sizes),
+                row, bottom = last_row,
+            )
+            last_row += row
+        legend_lines = tuple(mk_line(b) for b in range(bins.size))
+        legend_text = mlines.Line2D([0], [0], color="none", label="Unseen\nAnimals")
+        legend_entries = (legend_text,)+legend_lines
+        legend = fig.legend(handles=legend_entries, loc="outside right center")
+        legend.get_texts()[0].set_position((-25, 0))
+        ax.set_ylabel("Model Instances")
+        ax.set_xlabel("Latent Model Size")
+        ax.set_title("Distribution of Unseen Animals")
+        pdf.savefig(fig)
+        plt.close(fig)
+        #print(hists)
 
     ## specific performance plots for best model by MAE in latent_size = 30
     latent_size = 30
@@ -378,4 +483,3 @@ if __name__ == '__main__':
         fig3,axs = plot_x_obs(x,obs,b)
         pdf.savefig(fig3)
         plt.close(fig3)
-
